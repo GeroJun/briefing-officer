@@ -89,6 +89,8 @@ for d in "$MEETINGS_DIR" "$PEOPLE_DIR" "$DAILY_DIR" "$TEMPLATES_DIR"; do
 done
 ```
 
+(The `for d in "$a" "$b" ...` form above already quotes each variable individually, so folder names containing spaces work correctly — unlike a single space-joined string.)
+
 For each missing folder, ask the user: **"Create `<folder>` in your vault? [y/N]"** — if yes, `mkdir -p "$VAULT_ROOT/<folder>"`.
 
 ### 0c. Check required CLI tools

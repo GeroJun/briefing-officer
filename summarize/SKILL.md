@@ -38,6 +38,7 @@ Alternative to `mlx_whisper`: set `ELEVENLABS_API_KEY` to use ElevenLabs Scribe 
 The skill reads these variables at runtime. Override any of them via environment variables, or edit the defaults here:
 
 ```
+PROFILE        = full               # full | learning — see below
 VAULT_ROOT     = $VAULT_ROOT        # auto-detected if not set (see Step 0a)
 SUMMARIES_DIR  = 08 Summaries
 REFERENCES_DIR = 07 References
@@ -45,9 +46,26 @@ PEOPLE_DIR     = 04 People
 DAILY_DIR      = 02 Daily
 TEMPLATES_DIR  = _Templates
 BASES_DIR      = _Bases
+SKIP_REFERENCES = false   # if true, never create concept reference notes (Step 5) — wikilinks stay dangling
+SKIP_PEOPLE     = false   # if true, never create person notes (Step 5) — people wikilinks stay dangling
+SKIP_DAILY      = false   # if true, never update the daily note (Step 7)
 ```
 
 All paths below are relative to `$VAULT_ROOT`.
+
+### `PROFILE`
+
+For dropping this skill into a vault you already maintain with its own structure and conventions, `PROFILE=learning` produces **exactly one file per source** — no transcript note, no archived audio, no person/reference notes, no daily-note edit, no Bases update. Concretely, setting `PROFILE=learning` is equivalent to setting all of the following, and additionally:
+
+- `SKIP_REFERENCES=true`, `SKIP_PEOPLE=true`, `SKIP_DAILY=true`
+- Step 1b (transcript note) — skipped entirely, transcript stays in `/tmp` for the duration of the run only
+- Step 1c (audio archival + click-to-play) — skipped entirely, no file copied into the vault
+- Step 6 (Bases update) — skipped entirely
+- Step 2 output location — always flat: `$SUMMARIES_DIR/<Title>.md`, ignoring any per-channel/show subfolder
+- `categories: ["[[posts.base]]"]` frontmatter — omitted
+- `transcript:` / `audio:` frontmatter fields — omitted (no such notes exist in this profile)
+
+`PROFILE=full` (the default) is today's behavior, unchanged. The three `SKIP_*` flags remain independent overrides on top of either profile if you want a custom mix (e.g. `PROFILE=full` with `SKIP_DAILY=true`).
 
 ## Trigger
 
@@ -89,12 +107,16 @@ After they answer, validate that `<answer>/.obsidian/` exists before using it �
 ### 0b. Check required folders
 
 ```bash
-for d in "$SUMMARIES_DIR" "$REFERENCES_DIR" "$PEOPLE_DIR" "$DAILY_DIR" "$TEMPLATES_DIR"; do
+dirs=("$SUMMARIES_DIR")
+[ "$SKIP_REFERENCES" = "true" ] || dirs+=("$REFERENCES_DIR")
+[ "$SKIP_PEOPLE" = "true" ] || dirs+=("$TEMPLATES_DIR" "$PEOPLE_DIR")
+[ "$SKIP_DAILY" = "true" ] || dirs+=("$DAILY_DIR")
+for d in "${dirs[@]}"; do
   [ -d "$VAULT_ROOT/$d" ] || echo "MISSING: $d"
 done
 ```
 
-For each missing folder, ask the user: **"Create `<folder>` in your vault? [y/N]"** — if yes, `mkdir -p "$VAULT_ROOT/<folder>"`.
+For each missing folder, ask the user: **"Create `<folder>` in your vault? [y/N]"** — if yes, `mkdir -p "$VAULT_ROOT/<folder>"`. Folders whose owning step is globally skipped via `SKIP_REFERENCES`/`SKIP_PEOPLE`/`SKIP_DAILY` are excluded from this check entirely — no point creating a folder the skill will never write to.
 
 ### 0c. Check required CLI tools
 
@@ -107,6 +129,8 @@ done
 For each missing tool, tell the user what's missing and **ask before installing** — installs touch the user's system. Use the install commands from the Requirements table above. If the user declines, note which tools are missing and warn that the corresponding content types (YouTube, web articles, PDFs, EPUBs) will fail until installed.
 
 ### 0d. Install the person template if missing
+
+Skip this entire step if `SKIP_PEOPLE=true` — no person notes will ever be created, so there's no template to install.
 
 The skill ships two person templates in the repo's `templates/` folder (shared with `summarize-call`):
 
@@ -169,6 +193,8 @@ The chosen mode determines which steps run:
 | 5c Dangling-link audit | ✓ | ✗ |
 | 6 Bases update | ✓ (if bases exist) | ✗ |
 | 7 Daily note | ✓ | ✓ |
+
+If `SKIP_REFERENCES`/`SKIP_PEOPLE`/`SKIP_DAILY` are set in Configuration, the corresponding step is skipped regardless of depth mode — these are global overrides, not mode-dependent. `PROFILE=learning` sets all three plus skips Steps 1b, 1c, and 6 outright — see the `PROFILE` section above.
 
 For book chapter-by-chapter depth (Step 1 book section), detailed mode gets the full 300-600 words per chapter; minimal mode gets a flatter single summary regardless of chapter count.
 
@@ -266,6 +292,8 @@ Read directly from user message or vault path.
 
 ## Step 1b: Save transcript (audio/video content only)
 
+Skip this entire step if `PROFILE=learning` — the transcript is only used in-memory for this run and is not written to the vault.
+
 For any content that has audio — YouTube videos, podcast episodes, lectures/talks with recordings — save the extracted transcript as a permanent vault note.
 
 **When to create a transcript note:**
@@ -296,6 +324,8 @@ unread: true
 This step happens immediately after text extraction (Step 1) and before output structure planning (Step 2). The transcript is the raw source material — always preserve it.
 
 ## Step 1c: Archive audio to the vault + enable click-to-play timestamps (audio/video content only)
+
+Skip this entire step if `PROFILE=learning` — no audio is copied into the vault, so there is nothing to wire click-to-play links up to.
 
 If the user has the **[Media Extended](https://github.com/aidenlx/media-extended)** Obsidian plugin installed (assume YES unless proven otherwise — it's a common companion plugin for this workflow), move the downloaded source audio into the vault and wire up click-to-play timestamps throughout the summary.
 
@@ -392,6 +422,8 @@ Based on content type, choose the appropriate format:
 | Podcast episode | `08 Summaries/<Show>/Summaries/<Title>.md` | `podcast` | `recording`, `audio` (wikilink to vault mp3 if archived per Step 1c), `segment` (e.g. `"1:17:00 – 2:50:50"` if cropped), `people`, `guest`, `hosts`, `guests`, `duration`, `transcript` |
 | Lecture / talk | `08 Summaries/<Title>.md` | `lecture` | `creator`, `recording` (if URL), `audio` (wikilink to vault mp3 if archived per Step 1c), `transcript` |
 
+**`PROFILE=learning` override:** ignore the per-channel/show folder column entirely — every summary lands flat at `$SUMMARIES_DIR/<Title>.md` regardless of content type. Omit `transcript` and `audio` from the extra fields (no such notes/files exist in this profile) and omit `categories: ["[[posts.base]]"]` from the "all notes" fields below (no Bases in this profile).
+
 **All notes** get: `created`, `updated`, `date`, `summary`, `categories: ["[[posts.base]]"]`, `unread: true`
 
 **`summary` field length — HARD LIMIT: ≤70 characters.** One tight line, no wikilinks, no paragraph-length blurbs. The `> [!tldr]` callout at the top of the body is where the long-form overview lives. The frontmatter `summary` is just a scannable hint for base views — think newspaper subhead, not abstract. Examples that are the right size:
@@ -474,7 +506,7 @@ Summary length must be **proportional** to the source material. A 10-minute vide
 5b. **Never create two separate wikilinks for the same entity.** If a person has a canonical note name plus other handles / real names / pseudonyms, use alias syntax — `[[Cobie|Jordan Fish]]`, `[[Bob Laksiv|King BTC]]` — not two siblings like `[[Cobie]] / [[Jordan Fish]]` or `[[Bob Laksiv]] / [[King BTC]]`. The canonical note is whichever name already exists (or will exist) in `04 People/`; everything else is a display alias pointing at it. Same for companies/products with renames — `[[Facebook|Meta]]`, `[[X|Twitter]]`. When it's natural to mention both, write it as prose: `[[Cobie]] (real name Jordan Fish)`, `[[Bob Laksiv]] (a.k.a. King BTC)`. Rule of thumb: one entity = one link target, always.
 6. **Use actual Japanese/Chinese characters** for non-English words, not romanization
 7. **Timestamps** on topic headings and quotes when available (YouTube, podcasts)
-8. **`people` field**: only people who created/appeared in the content. Mentioned people go in `## People Mentioned`
+8. **`people` field**: only people who created/appeared in the content. Mentioned people go in `## People Mentioned` — omit that section entirely when `SKIP_PEOPLE=true` (same as minimal mode)
 9. **Audio click-to-play** — if Step 1c archived a local mp3 and Media Extended is installed, every `> [!quote]` callout that embeds a transcript block should also carry a `> ▶ [[<audio>.mp3#t=<sec>|jump player to H:MM:SS]]` text link (one pinned top-of-note player, many text-link jumps). See Step 1c for the full pattern and the regex transform.
 
 ### Audience adaptation
@@ -485,7 +517,9 @@ Summary length must be **proportional** to the source material. A 10-minute vide
 
 ## Step 5: Create reference notes (one layer deep)
 
-**This is the most important step. Every wikilink MUST resolve to a note. No dangling links.**
+**This is the most important step. Every wikilink MUST resolve to a note. No dangling links.** (Unless overridden — see below.)
+
+The concept-notes half of this step and the person-notes half are independently skippable: skip concept reference notes when `SKIP_REFERENCES=true`, skip person notes when `SKIP_PEOPLE=true`. When skipped, the corresponding wikilinks are intentionally left dangling.
 
 ### 5a. Extract and audit all wikilinks
 
@@ -511,6 +545,8 @@ done
 ### 5b. Create missing notes
 
 #### Technical concepts, companies, products, places
+Skip this subsection if `SKIP_REFERENCES=true`.
+
 Create in `07 References/<Term>.md`:
 
 ```markdown
@@ -525,6 +561,8 @@ unread: true
 ```
 
 #### People
+Skip this subsection if `SKIP_PEOPLE=true`.
+
 Create in `$PEOPLE_DIR/<Full Name>.md` using the person template at `$VAULT_ROOT/$TEMPLATES_DIR/new person template.md` (installed by Step 0d). Conventions:
 
 - **Public figures**: research and write a rich bio (birthday, career, links, key facts). The `> [!info]` callout should be a substantive snapshot — life story, mission, current focus — not a stub.
@@ -539,18 +577,20 @@ For large numbers of missing notes (>10), use parallel subagents (highest availa
 
 ### 5c. Verify — no dangling links
 
+Skip this entire subsection if both `SKIP_REFERENCES` and `SKIP_PEOPLE` are true — dangling links are expected and intentional in that case.
+
 After all notes are created, re-run the audit from 5a to confirm zero missing notes. If any remain (e.g. a subagent failed or skipped one), create them manually. **The summary is not done until this verification passes.**
 
 ## Step 6: Update bases (optional — skip if not using Obsidian Bases)
 
-This step only applies if `$VAULT_ROOT/$BASES_DIR/posts.base` exists. If it doesn't, skip Step 6 entirely.
+Skip this entire step if `PROFILE=learning`. Otherwise, this step only applies if `$VAULT_ROOT/$BASES_DIR/posts.base` exists — if it doesn't, skip Step 6 entirely.
 
 ```bash
 [ -f "$VAULT_ROOT/$BASES_DIR/posts.base" ] || echo "No posts.base — skipping Step 6"
 ```
 
 If it does exist:
-- **`posts.base`**: if new people appeared as creators/guests, add named views for them using the YAML block below, then embed them in their person notes (in a `## episodes` or `## videos` section) via `![[posts.base#Person Name]]`.
+- **`posts.base`**: if new people appeared as creators/guests, add named views for them using the YAML block below, then embed them in their person notes (in a `## episodes` or `## videos` section) via `![[posts.base#Person Name]]`. Skip this bullet if `SKIP_PEOPLE=true` — there are no person notes to embed views into.
 - If a new channel/show folder was created, add a channel-specific view to `posts.base` the same way.
 
 Named view YAML block to append under the `views:` list:
@@ -572,6 +612,8 @@ Named view YAML block to append under the `views:` list:
 ```
 
 ## Step 7: Update daily note
+
+Skip this step entirely if `SKIP_DAILY` is true.
 
 Update `$VAULT_ROOT/$DAILY_DIR/YYYY/MM/MM-DD-YY ddd.md` (e.g. `02 Daily/2026/04/04-11-26 Sat.md`). Create the `YYYY/MM/` subdirectories if they don't exist. No `# Title` heading — the filename is the title. Set `unread: true` in frontmatter.
 
@@ -595,7 +637,7 @@ Update `$VAULT_ROOT/$DAILY_DIR/YYYY/MM/MM-DD-YY ddd.md` (e.g. `02 Daily/2026/04/
 ## Key rules
 
 1. **Wikilink everything** — every concept, person, company, place, and **book/film/show title** gets a `[[wikilink]]`
-2. **One layer deep** — create reference/person notes for EVERY wikilinked term that doesn't already have a note
+2. **One layer deep** — create reference/person notes for EVERY wikilinked term that doesn't already have a note (unless overridden by `SKIP_REFERENCES`/`SKIP_PEOPLE` in Configuration, in which case those links stay dangling by design)
 3. **No `# Title` headings** — Obsidian shows filename as title
 4. **Never repeat frontmatter in body** — frontmatter is metadata, body is content
 5. **Set `unread: true`** on every note created or modified

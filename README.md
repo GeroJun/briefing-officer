@@ -1,4 +1,4 @@
-# ai-life-skills
+# Briefing Officer
 
 A collection of skills I use with Claude Code to improve my life in various ways. Designed to pair with an AI-managed Obsidian vault — the skills read from and write to the vault.
 
@@ -40,7 +40,7 @@ Two Obsidian plugins that pair well with the skills — see [`obsidian-plugins/`
 Open Claude Code in any directory and paste this:
 
 ```
-Install the ai-life-skills pack from https://github.com/reysu/ai-life-skills. Clone the repo to ~/src/ai-life-skills, ask me where I want the new Obsidian vault to live, create the vault folder with the full folder structure the skills expect, symlink every skill in the repo into ~/.claude/skills/, copy vault/CLAUDE.md from the repo to the new vault's root, copy the daily-brief and daily-news prompt-callout templates from vault/01 Updates/ into the vault's 01 Updates/ folder, and ask me whether to also install the bundled unread-dot Obsidian plugin into the vault's .obsidian/plugins/ folder.
+Install the Briefing Officer pack from https://github.com/GeroJun/briefing-officer. Clone the repo to ~/src/briefing-officer, ask me where I want the new Obsidian vault to live, create the vault folder with the full folder structure the skills expect, symlink every skill in the repo into ~/.claude/skills/, copy vault/CLAUDE.md from the repo to the new vault's root, copy the daily-brief and daily-news prompt-callout templates from vault/01 Updates/ into the vault's 01 Updates/ folder, and ask me whether to also install the bundled unread-dot Obsidian plugin into the vault's .obsidian/plugins/ folder.
 ```
 
 Claude will:
@@ -67,10 +67,10 @@ If you just want one skill and already have a vault:
 
 ```bash
 mkdir -p ~/src
-git clone https://github.com/reysu/ai-life-skills ~/src/ai-life-skills
-ln -s ~/src/ai-life-skills/summarize ~/.claude/skills/summarize
+git clone https://github.com/GeroJun/briefing-officer ~/src/briefing-officer
+ln -s ~/src/briefing-officer/summarize ~/.claude/skills/summarize
 # or:
-ln -s ~/src/ai-life-skills/summarize-call ~/.claude/skills/summarize-call
+ln -s ~/src/briefing-officer/summarize-call ~/.claude/skills/summarize-call
 ```
 
 The skills share a `templates/` folder at the repo root — leave it where it is, both skills reference it with a relative path.
@@ -148,6 +148,24 @@ export VAULT_ROOT="/path/to/vault"
 ```
 
 Otherwise the skills walk up from your current directory looking for `.obsidian/`.
+
+### Already have a vault? Use `PROFILE=learning`
+
+If you're dropping `summarize` into a vault you already maintain — different folder layout, different conventions — set `PROFILE=learning` to get **one file per source and nothing else**: no transcript note, no archived audio, no person/reference notes, no daily-note edit, no Bases update. Concepts stay as dangling `[[wikilinks]]` instead of spawning new notes.
+
+Set it as an environment variable in your global Claude Code settings (`~/.claude/settings.json`) so it applies no matter what directory you run Claude Code from:
+
+```json
+{
+  "env": {
+    "VAULT_ROOT": "/path/to/your/vault",
+    "PROFILE": "learning",
+    "SUMMARIES_DIR": "path/to/your/summaries/folder"
+  }
+}
+```
+
+`SUMMARIES_DIR` is relative to `VAULT_ROOT` and can point anywhere — it doesn't need to be named `08 Summaries` or live at the vault root. `PROFILE=full` (the default) keeps today's behavior: transcripts, archived audio, person/reference notes, Bases, the works. See the `PROFILE` section in `summarize/SKILL.md`'s Configuration block for exactly what each mode does.
 
 ## Requirements
 

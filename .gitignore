@@ -1,5 +1,6 @@
 # Claude Code local settings (contains personal paths / approvals)
 .claude/settings.local.json
+.claude/settings.json
 
 # macOS
 .DS_Store
@@ -7,3 +8,6 @@
 # Editors
 .vscode/
 .idea/
+
+# Personal files not meant for the repo
+*.pdf
