@@ -34,14 +34,22 @@ Takes a call recording (video or audio), transcribes it with speaker labels, sum
 The skill reads these variables at runtime. Override any of them via environment variables, or edit the defaults here:
 
 ```
+PROFILE          = full               # full | learning — see below
 VAULT_ROOT       = $VAULT_ROOT        # auto-detected if not set (see Step 0a)
 MEETINGS_DIR     = 03 Meetings
 PEOPLE_DIR       = 04 People
+REFERENCES_DIR   = 07 References
 DAILY_DIR        = 02 Daily
 TEMPLATES_DIR    = _Templates
+SKIP_REFERENCES  = false   # if true, never create notes for mid-call name-drops (Step 6) — wikilinks stay dangling
+SKIP_DAILY       = false   # if true, never update the daily note
 ```
 
-All paths below are relative to `$VAULT_ROOT`.
+All paths below are relative to `$VAULT_ROOT`. Steps in this skill call helper scripts under `scripts/lib/` — those paths are relative to this repo's root (`ai-life-skills/`, cloned or symlinked at install time via `~/.claude/skills/summarize-call`), **not** to `$VAULT_ROOT` or `$PWD`. Resolve the repo root once at the start of a run: `dirname "$(dirname "$(readlink -f "$0")")"` from this file's real location if invoked directly, or `~/.claude/skills/summarize-call` (following the symlink) if installed the standard way — then reference `$REPO_ROOT/scripts/lib/<name>.sh`.
+
+### `PROFILE`
+
+For a vault this skill doesn't own outright, `PROFILE=learning` is equivalent to `SKIP_REFERENCES=true` and `SKIP_DAILY=true`. Unlike `summarize`, the call note, transcript, and participant person notes are **not** suppressed by `learning` — they're the actual output of this skill, not side-effect notes. Only the two things `PROFILE=learning` targets are: notes for people/companies/concepts *name-dropped mid-call* (Step 6, same as minimal depth mode) and the daily-note edit. `PROFILE=full` (default) keeps today's behavior.
 
 ## Trigger
 
@@ -61,18 +69,10 @@ Before doing any work, verify the environment is ready. **Skip any check that al
 ### 0a. Resolve the vault root
 
 ```bash
-vault=""
-if [ -n "$VAULT_ROOT" ]; then
-  vault="$VAULT_ROOT"
-else
-  dir="$PWD"
-  while [ "$dir" != "/" ]; do
-    if [ -d "$dir/.obsidian" ]; then vault="$dir"; break; fi
-    dir="$(dirname "$dir")"
-  done
-fi
-echo "Vault: ${vault:-NOT FOUND}"
+scripts/lib/resolve-vault.sh
 ```
+
+Prints `$VAULT_ROOT` if it's set, otherwise walks up from `$PWD` looking for a directory containing `.obsidian/`. Exits 1 with no output if nothing is found.
 
 If no vault is found, ask the user:
 
@@ -84,12 +84,11 @@ After they answer, validate that `<answer>/.obsidian/` exists before using it �
 ### 0b. Check required folders
 
 ```bash
-for d in "$MEETINGS_DIR" "$PEOPLE_DIR" "$DAILY_DIR" "$TEMPLATES_DIR"; do
-  [ -d "$VAULT_ROOT/$d" ] || echo "MISSING: $d"
-done
+dirs=("$MEETINGS_DIR" "$PEOPLE_DIR" "$TEMPLATES_DIR")
+[ "$SKIP_REFERENCES" = "true" ] || dirs+=("$REFERENCES_DIR")
+[ "$SKIP_DAILY" = "true" ] || dirs+=("$DAILY_DIR")
+scripts/lib/check-folders.sh "$VAULT_ROOT" "${dirs[@]}"
 ```
-
-(The `for d in "$a" "$b" ...` form above already quotes each variable individually, so folder names containing spaces work correctly — unlike a single space-joined string.)
 
 For each missing folder, ask the user: **"Create `<folder>` in your vault? [y/N]"** — if yes, `mkdir -p "$VAULT_ROOT/<folder>"`.
 
@@ -107,13 +106,21 @@ If ffmpeg is missing, ask the user before installing. Install command depends on
 
 ### 0d. Install the person template if missing
 
-If `$VAULT_ROOT/$TEMPLATES_DIR/new person template.md` does not exist, ask the user which version to install:
+Ask the user which version to install:
 
 > **Install person template — which version?**
 > 1. **Minimal** (default, works in any vault)
 > 2. **Full** (requires Dataview plugin + Obsidian Bases)
 
-Copy the chosen template from the repo's shared `templates/` directory (sibling of this skill dir, i.e. `../templates/`) into `$VAULT_ROOT/$TEMPLATES_DIR/new person template.md`. If the file already exists, leave it alone — the user may have customized it.
+Then install it:
+
+```bash
+scripts/lib/install-person-template.sh "$VAULT_ROOT" "$TEMPLATES_DIR" minimal templates
+# or, if the user picked full:
+scripts/lib/install-person-template.sh "$VAULT_ROOT" "$TEMPLATES_DIR" full templates
+```
+
+(`templates` is this repo's shared `templates/` folder, relative to the repo root — the same one `summarize` uses.) The script leaves an existing template untouched and prints `SKIPPED: already exists` in that case.
 
 Once Step 0 passes, proceed to Step 0.5.
 
@@ -121,9 +128,11 @@ Once Step 0 passes, proceed to Step 0.5.
 
 Before transcribing, establish which depth the user wants:
 
-1. **Scan the invocation first.** If the user's request already specifies a mode, use it and skip the prompt:
-   - Words like `minimal`, `fast`, `quick`, `--minimal`, `-m` → minimal mode
-   - Words like `detailed`, `deep`, `full`, `--detailed`, `-d` → detailed mode
+1. **Scan the invocation first.** Run:
+   ```bash
+   scripts/lib/parse-depth-mode.sh "<the user's full invocation text>"
+   ```
+   Prints `minimal`, `detailed`, or nothing. If it prints a mode, use it and skip the prompt below.
 2. **Otherwise, prompt.** No default — if unspecified, ask every time:
 
 > **Depth?**
@@ -132,7 +141,7 @@ Before transcribing, establish which depth the user wants:
 
 This keeps interactive runs explicit while letting scheduled tasks / cron / `/loop` pass the mode in the invocation (e.g. `/summarize-call ~/call.mp4 minimal`) without blocking on input.
 
-The chosen mode determines how Step 6 runs.
+The chosen mode determines how Step 6 runs. `SKIP_REFERENCES=true` (including via `PROFILE=learning`) forces minimal-mode Step 6 behavior regardless of depth mode — see the `PROFILE` section above.
 
 ## Step 1: Choose transcription method
 
@@ -352,6 +361,7 @@ Scribe handles both transcription AND diarization in one call — no pyannote ne
 - For mid-call name-drops: behavior depends on depth mode (see Step 6)
 
 ### Daily note
+Skip this entire subsection if `SKIP_DAILY=true` (including via `PROFILE=learning`).
 - Update `$VAULT_ROOT/$DAILY_DIR/YYYY/MM/MM-DD-YY ddd.md` (create `YYYY/MM/` if missing)
 - No `# Title` heading — filename is the title
 - Set `unread: true` in frontmatter
@@ -362,23 +372,21 @@ Scribe handles both transcription AND diarization in one call — no pyannote ne
 
 ## Step 6: Handle mid-call name-drops
 
-### Detailed mode
+Skip the reference-note half of this step entirely if `SKIP_REFERENCES=true` (including via `PROFILE=learning`) — see below.
+
+### Detailed mode (or `SKIP_REFERENCES=false`)
 For every person, company, product, or concept wikilinked in the call note (that isn't already a note), create a reference or person note:
 - **People**: research public figures (birthday, career, links); private individuals get minimal notes based only on what was said
-- **Concepts / companies / products**: create in `07 References/` (or `$REFERENCES_DIR` if you have the `/summarize` skill installed) with a 2-4 sentence explanation
+- **Concepts / companies / products**: create in `$REFERENCES_DIR` with a 2-4 sentence explanation
 - For large numbers of notes (>10 missing), dispatch parallel subagents (highest available model) in batches of ~20
 
-After all notes are created, audit for dangling links. The regex excludes `|` (alias), `#` (heading ref), and `^` (block ref) so `[[Target|Alias]]`, `[[Page#Heading]]`, and `[[Page^block]]` all resolve to the canonical note name `Target` / `Page`:
+After all notes are created, audit for dangling links using the shared script:
 ```bash
-grep -oE '\[\[[^]|#^]+' "<call_note_path>" | sed 's/\[\[//' | sort -u
-for term in <each>; do
-  found=$(find "$VAULT_ROOT" -name "$term.md" -not -path "*/.Trash/*" 2>/dev/null | head -1)
-  [ -z "$found" ] && echo "MISSING: $term"
-done
+scripts/lib/audit-wikilinks.sh "$VAULT_ROOT" "<call_note_path>"
 ```
-Re-create any missed notes. The call is not done until zero dangling links remain.
+It resolves `[[Target|Alias]]`, `[[Page#Heading]]`, and `[[Page^block]]` to their canonical note name and prints one `MISSING: <term>` line per dangling link. Re-create any missed notes. The call is not done until zero dangling links remain.
 
-### Minimal mode
+### Minimal mode (or `SKIP_REFERENCES=true`)
 Create person notes only for call participants (those in the `people` frontmatter). All other wikilinks — mid-call name-drops, concepts, companies — stay dangling. Skip the audit.
 
 ## Key rules

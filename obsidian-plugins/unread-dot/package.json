@@ -1,0 +1,16 @@
+{
+  "name": "unread-dot",
+  "version": "1.0.0",
+  "description": "Shows a blue dot next to files with unread: true in frontmatter. Auto-clears when you open the file.",
+  "private": true,
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch"
+  },
+  "author": "Eric Su",
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "obsidian": "^1.7.2"
+  }
+}

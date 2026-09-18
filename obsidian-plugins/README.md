@@ -1,6 +1,6 @@
 # Obsidian plugins
 
-Two optional obsidian plugins that may be useful for an automated LLM second brain setup. 
+Two optional Obsidian plugins that may be useful for an automated LLM second brain setup.
 
 ## unread-dot
 
@@ -18,14 +18,33 @@ cp -r obsidian-plugins/unread-dot /path/to/your/vault/.obsidian/plugins/
 
 Then in Obsidian: Settings → Community plugins → enable "Unread Dot". (You may need to toggle "Restricted mode" off first.)
 
+### Building from source
+
+`main.js` is committed pre-built so the copy-paste install above works without a build step. To modify the plugin:
+
+```bash
+cd obsidian-plugins/unread-dot
+npm install
+npm run build   # bundles src/main.js -> main.js
+```
+
 ## flashcards-obsidian (Anki)
 
-Creates Anki cards from `==highlighted==` text, `Question::Answer` syntax, `#card` tags, and more. Fork of [reuseman/flashcards-obsidian](https://github.com/reuseman/flashcards-obsidian) — see [`flashcards-obsidian/README.md`](./flashcards-obsidian) here for install + Anki-Connect setup, or the [upstream wiki](https://github.com/reuseman/flashcards-obsidian/wiki) for full syntax docs.
+Creates Anki cards from `==highlighted==` text, `Question::Answer` syntax, `#card` tags, and more. **Not vendored in this repo** — it's a compiled third-party bundle we can't audit, diff, or rebuild without its source, so install it directly from upstream instead:
+
+- Fork used previously: [reuseman/flashcards-obsidian](https://github.com/reuseman/flashcards-obsidian) (or search "Flashcards" in Obsidian's Community Plugins browser)
+- Full syntax reference: the [upstream wiki](https://github.com/reuseman/flashcards-obsidian/wiki)
 
 ### Install
 
-```bash
-cp -r obsidian-plugins/flashcards-obsidian /path/to/your/vault/.obsidian/plugins/
-```
+1. In Obsidian: Settings → Community plugins → Browse → search "Flashcards" → Install → Enable. (Or clone the upstream repo into your vault's `.obsidian/plugins/` folder manually if you need a specific fork.)
+2. Install [Anki](https://apps.ankiweb.net/) and the [AnkiConnect](https://ankiweb.net/shared/info/2055492159) add-on. Anki must be running for the plugin to work.
+3. Open the plugin's settings to pick the deck, note type, and field mappings you want cards to land in.
 
-Then install Anki + AnkiConnect, enable the plugin in Obsidian, and configure deck/note-type in the plugin's settings.
+### Quick usage
+
+- `==highlighted text==` becomes a cloze card
+- `Question::Answer` becomes a basic card
+- `Question:::Answer` becomes a reversed card
+- Tag a note (or block) with `#card` to make a basic card
+- Run the "Flashcards: Generate for the current file" command to push cards to Anki

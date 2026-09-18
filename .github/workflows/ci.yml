@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: shellcheck scripts/lib/*.sh install.sh
+
+      - name: install bats
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      - name: bats
+        run: bats tests/lib/
+
+  unread-dot-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: install
+        working-directory: obsidian-plugins/unread-dot
+        run: npm ci
+
+      - name: build
+        working-directory: obsidian-plugins/unread-dot
+        run: npm run build
+
+      - name: verify the committed bundle matches the build output
+        working-directory: obsidian-plugins/unread-dot
+        run: |
+          if ! git diff --quiet -- main.js; then
+            echo "main.js is out of date — run 'npm run build' in obsidian-plugins/unread-dot and commit the result." >&2
+            git diff -- main.js
+            exit 1
+          fi

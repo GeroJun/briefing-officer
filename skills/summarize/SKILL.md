@@ -51,7 +51,7 @@ SKIP_PEOPLE     = false   # if true, never create person notes (Step 5) — peop
 SKIP_DAILY      = false   # if true, never update the daily note (Step 7)
 ```
 
-All paths below are relative to `$VAULT_ROOT`.
+All paths below are relative to `$VAULT_ROOT`. Steps in this skill call helper scripts under `scripts/lib/` — those paths are relative to this repo's root (`ai-life-skills/`, cloned or symlinked at install time via `~/.claude/skills/summarize`), **not** to `$VAULT_ROOT` or `$PWD`. Resolve the repo root once at the start of a run: `dirname "$(dirname "$(readlink -f "$0")")"` from this file's real location if invoked directly, or `~/.claude/skills/summarize` (following the symlink) if installed the standard way — then reference `$REPO_ROOT/scripts/lib/<name>.sh`.
 
 ### `PROFILE`
 
@@ -84,18 +84,10 @@ Before doing any work, verify the environment is ready. **Skip any check that al
 ### 0a. Resolve the vault root
 
 ```bash
-vault=""
-if [ -n "$VAULT_ROOT" ]; then
-  vault="$VAULT_ROOT"
-else
-  dir="$PWD"
-  while [ "$dir" != "/" ]; do
-    if [ -d "$dir/.obsidian" ]; then vault="$dir"; break; fi
-    dir="$(dirname "$dir")"
-  done
-fi
-echo "Vault: ${vault:-NOT FOUND}"
+scripts/lib/resolve-vault.sh
 ```
+
+Prints `$VAULT_ROOT` if it's set, otherwise walks up from `$PWD` looking for a directory containing `.obsidian/`. Exits 1 with no output if nothing is found.
 
 If no vault is found, ask the user:
 
@@ -106,14 +98,14 @@ After they answer, validate that `<answer>/.obsidian/` exists before using it �
 
 ### 0b. Check required folders
 
+Build the list of dirs to check based on the active `SKIP_*`/`PROFILE` flags, then check them all in one call — each dir is passed as its own argument, so names containing spaces (e.g. `400 Learning  🌱/08 Summaries`) are handled correctly:
+
 ```bash
 dirs=("$SUMMARIES_DIR")
 [ "$SKIP_REFERENCES" = "true" ] || dirs+=("$REFERENCES_DIR")
 [ "$SKIP_PEOPLE" = "true" ] || dirs+=("$TEMPLATES_DIR" "$PEOPLE_DIR")
 [ "$SKIP_DAILY" = "true" ] || dirs+=("$DAILY_DIR")
-for d in "${dirs[@]}"; do
-  [ -d "$VAULT_ROOT/$d" ] || echo "MISSING: $d"
-done
+scripts/lib/check-folders.sh "$VAULT_ROOT" "${dirs[@]}"
 ```
 
 For each missing folder, ask the user: **"Create `<folder>` in your vault? [y/N]"** — if yes, `mkdir -p "$VAULT_ROOT/<folder>"`. Folders whose owning step is globally skipped via `SKIP_REFERENCES`/`SKIP_PEOPLE`/`SKIP_DAILY` are excluded from this check entirely — no point creating a folder the skill will never write to.
@@ -145,21 +137,15 @@ Otherwise, ask the user which version to install:
 > 1. **Minimal** (default, works in any vault)
 > 2. **Full** (requires Dataview plugin + Obsidian Bases)
 
-Then copy the chosen template into the user's `_Templates/` folder:
+Then install the chosen template:
 
 ```bash
-skill_dir="$(dirname "$0")"   # or wherever this SKILL.md lives
-target="$VAULT_ROOT/$TEMPLATES_DIR/new person template.md"
-
-if [ ! -f "$target" ]; then
-  # Use the user's choice — default to minimal
-  src="$skill_dir/../templates/new person template (minimal).md"
-  # if user picked full: src="$skill_dir/../templates/new person template.md"
-  cp "$src" "$target"
-fi
+scripts/lib/install-person-template.sh "$VAULT_ROOT" "$TEMPLATES_DIR" minimal templates
+# or, if the user picked full:
+scripts/lib/install-person-template.sh "$VAULT_ROOT" "$TEMPLATES_DIR" full templates
 ```
 
-Note: whichever version gets installed lands at `_Templates/new person template.md` (no `(minimal)` suffix) so the skill's later references work uniformly.
+(`templates` is this repo's shared `templates/` folder, relative to the repo root.) The script leaves an existing template untouched and prints `SKIPPED: already exists` in that case. Whichever version gets installed lands at `_Templates/new person template.md` (no `(minimal)` suffix) so the skill's later references work uniformly.
 
 Once Step 0 passes, proceed to Step 0.5.
 
@@ -167,9 +153,11 @@ Once Step 0 passes, proceed to Step 0.5.
 
 Before extraction, establish which depth the user wants:
 
-1. **Scan the invocation first.** If the user's request already specifies a mode, use it and skip the prompt:
-   - Words like `minimal`, `fast`, `quick`, `--minimal`, `-m` → minimal mode
-   - Words like `detailed`, `deep`, `full`, `--detailed`, `-d` → detailed mode
+1. **Scan the invocation first.** Run:
+   ```bash
+   scripts/lib/parse-depth-mode.sh "<the user's full invocation text>"
+   ```
+   Prints `minimal`, `detailed`, or nothing. If it prints a mode, use it and skip the prompt below.
 2. **Otherwise, prompt.** No default — if unspecified, ask every time:
 
 > **Depth?**
@@ -238,48 +226,10 @@ If `pdftotext` is not available: `brew install poppler`
 
 ### EPUB (books)
 ```bash
-# Extract full text as markdown (preserves chapter structure)
 pandoc "<path>" -t markdown --wrap=none -o /tmp/summarize/book.md
-
-# If you need chapter boundaries, extract the TOC:
-pandoc "<path>" -t json | python3 -c "
-import json, sys
-doc = json.load(sys.stdin)
-for block in doc['blocks']:
-    if block['t'] == 'Header':
-        level = block['c'][0]
-        text = ''.join(
-            item['c'] if item['t'] == 'Str' else ' ' if item['t'] == 'Space' else ''
-            for item in block['c'][2]
-        )
-        print(f'L{level}: {text}')
-"
 ```
 
-**Chapter splitting strategy for books:**
-1. Extract full text with `pandoc` → markdown
-2. Identify chapter boundaries from headers (epubs have built-in TOC structure that pandoc preserves as `#`/`##` headers)
-3. Split into one chunk per chapter
-4. Dispatch parallel Opus subagents — **one per chapter** — same as any other long content
-5. A typical book (60-100k words, 15-30 chapters) produces chapters of ~3-5k words each — well within subagent context limits
-
-**For very long books (>30 chapters):** batch chapters into groups of ~5 per subagent to keep the number of parallel agents manageable. Each subagent summarizes its batch and returns section summaries.
-
-**CRITICAL — Book summary depth requirement:**
-- Each chapter MUST get its own dedicated `## Chapter N: Title` section with a **substantial** summary (300-600 words per chapter depending on chapter length)
-- Do NOT batch multiple chapters into a single brief paragraph — every chapter gets its own detailed treatment
-- Include key arguments, data points, examples, and quotes from each chapter
-- A 10-chapter book should produce ~3000-6000 words of summary content (excluding frontmatter/tldr)
-- A 30-chapter book should produce ~5000-10000 words
-- Think of each chapter summary as a standalone mini-essay that captures the chapter's core contribution
-- The goal is that someone reading the summary should understand what each chapter argues, not just what the book is "about" at a high level
-
-**Output structure for books:**
-- Location: `08 Summaries/<Book Title>.md` (or `08 Summaries/<Author>/<Book Title>.md` if summarizing multiple books by one author)
-- Frontmatter tag: `book`
-- Extra fields: `creator` (author wikilink), `published` (year), `isbn` (if known), `source` (wikilink to the epub file if it's in the vault, e.g. `"[[Book Title.epub]]"`)
-- Each chapter gets its own `## Chapter N: Title` section in the summary
-- Add a `## Chapter Navigation` callout at the top if the book has many chapters
+Books get chapter-by-chapter treatment, not a single flat summary — each chapter needs its own substantial (300-600 word) section, extracted via pandoc's TOC structure and dispatched to parallel subagents. **Read `references/book-handling.md` before summarizing any book** — it has the full extraction command, chapter-splitting strategy, the hard depth requirements, and the output structure.
 
 ### Other files (txt, docx, etc.)
 
@@ -327,87 +277,7 @@ This step happens immediately after text extraction (Step 1) and before output s
 
 Skip this entire step if `PROFILE=learning` — no audio is copied into the vault, so there is nothing to wire click-to-play links up to.
 
-If the user has the **[Media Extended](https://github.com/aidenlx/media-extended)** Obsidian plugin installed (assume YES unless proven otherwise — it's a common companion plugin for this workflow), move the downloaded source audio into the vault and wire up click-to-play timestamps throughout the summary.
-
-### 1c-i. Archive the audio
-
-Copy (or move) the downloaded mp3/wav/mp4 into `$VAULT_ROOT/_Attachments/` with a descriptive, human-scannable filename that includes the date and — if cropped — the segment range.
-
-```
-<Creator> x <Guest> <YYYY-MM-DD>.mp3
-<Creator> x <Guest> <YYYY-MM-DD> (HhMMm-HhMMm).mp3   # if cropped
-```
-
-**Add `audio: "[[<filename>.mp3]]"`** to the summary note's frontmatter so the attachment is a first-class property on the note (parallel to `transcript:`, `source:`, etc.).
-
-### 1c-ii. Embed ONE pinned player at the top
-
-Place a single full-length audio/video embed at the top of the summary, just above the `> [!tldr]` callout:
-
-```markdown
-> [!abstract] Audio — full interview (cropped H:MM:SS – H:MM:SS of the VOD)
-> ![[<filename>.mp3]]
-```
-
-**Do not scatter multiple `![[audio.mp3#t=...]]` embeds through the note** — every embed spawns a fresh player. Media Extended's pattern is one pinned player + many text-link jump-points.
-
-**Do NOT add:**
-- A "Pin this player / Media Extended: right-click → Pin" instruction underneath the embed. The user knows how their plugin works. Don't narrate it.
-- A "Key moments" / "Jump to" / "Chapters" callout listing timestamped highlights. The per-quote inline jumps (Step 1c-iii) already give every notable moment a click-to-play entry point; a separate highlights list is redundant and repeats the same timestamps twice.
-
-### 1c-iii. Add inline click-to-play links next to every quote
-
-For every `> [!quote]` callout that embeds a transcript line (`![[...Transcript#^block-id]]`), add a sibling line inside the same callout:
-
-```markdown
-> [!quote] Who — what they said
-> ![[<Transcript Note>#^block-id]]
-> ▶ [[<filename>.mp3#t=<seconds>|jump player to H:MM:SS]]
-```
-
-- The `#t=<seconds>` fragment is **audio-local seconds**, not wall-clock VOD time. If the audio was cropped (e.g. starting at VOD 1:17:00), subtract the crop offset from the VOD timestamp before emitting.
-- The `|jump player to H:MM:SS` alias is what the user reads — format it `H:MM:SS` when ≥1 hour, else `M:SS`.
-- The leading `▶ ` (U+25B6) is a visual cue — keep it.
-- These are **text links** (no `!` prefix), not embeds. Media Extended routes the click to the pinned player instead of creating a new one.
-
-### 1c-iv. Math for audio-local offsets
-
-```
-audio_sec = (vod_h * 3600 + vod_m * 60 + vod_s) - crop_start_sec
-```
-
-If the transcript already uses block IDs of the form `^p1-H-MM-SS` (absolute VOD timestamps), this regex transformation converts every quote-embed into one with an audio-local jump link appended:
-
-```python
-import re
-AUDIO = "<filename>.mp3"
-CROP_OFFSET_SEC = <crop start seconds>   # 0 if audio starts at beginning of the source
-
-pattern = re.compile(
-    r'^(> !\[\[[^\]]*Transcript#\^p1-(\d+)-(\d+)-(\d+)(?:-\d+)?\]\])$',
-    re.MULTILINE,
-)
-
-def repl(m):
-    block_line = m.group(1)
-    h, mm, ss = int(m.group(2)), int(m.group(3)), int(m.group(4))
-    audio_sec = (h*3600 + mm*60 + ss) - CROP_OFFSET_SEC
-    if audio_sec < 0:
-        return block_line
-    hh = audio_sec // 3600
-    mm2 = (audio_sec % 3600) // 60
-    ss2 = audio_sec % 60
-    label = f"{hh}:{mm2:02d}:{ss2:02d}" if hh else f"{mm2}:{ss2:02d}"
-    return f"{block_line}\n> ▶ [[{AUDIO}#t={audio_sec}|jump player to {label}]]"
-
-text = pattern.sub(repl, text)
-```
-
-Run this after Step 4 assembles the summary — it's a pure string transform.
-
-### 1c-v. If the user does NOT have Media Extended
-
-Fall back to native Obsidian syntax: one top-of-note `![[audio.mp3]]` embed only. Do **not** scatter `![[audio.mp3#t=N]]` embeds inline — they each spawn a separate player, which clutters the note. Inline timestamp references in that case should just be the VOD timestamp as plain text.
+For `PROFILE=full` content with audio (YouTube video, podcast episode, lecture recording), **read `references/audio-archival.md` before starting Step 2** — it covers archiving the source file to `_Attachments/`, the one-pinned-player embed pattern, per-quote click-to-play links, the audio-local timestamp math, and the fallback for vaults without the Media Extended plugin.
 
 ## Step 2: Determine output structure
 
@@ -523,22 +393,13 @@ The concept-notes half of this step and the person-notes half are independently 
 
 ### 5a. Extract and audit all wikilinks
 
-After the summary note is fully assembled, extract every unique wikilink programmatically:
-
-The regex excludes `|` (alias), `#` (heading ref), and `^` (block ref) so `[[Target|Alias]]`, `[[Page#Heading]]`, and `[[Page^block]]` all resolve to the canonical note name (`Target` / `Page`):
-```bash
-grep -oE '\[\[[^]|#^]+' "<summary_note_path>" | sed 's/\[\[//' | sort -u
-```
-
-Then check which ones are missing:
+After the summary note is fully assembled, run the shared audit script:
 
 ```bash
-for term in <each extracted term>; do
-  found=$(find "$VAULT_ROOT" -name "$term.md" \
-    -not -path "*/.Trash/*" -not -path "*/Clippings/*" 2>/dev/null | head -1)
-  if [ -z "$found" ]; then echo "MISSING: $term"; fi
-done
+scripts/lib/audit-wikilinks.sh "$VAULT_ROOT" "<summary_note_path>"
 ```
+
+It extracts every unique wikilink target (resolving `[[Target|Alias]]`, `[[Page#Heading]]`, and `[[Page^block]]` to their canonical note name) and prints one `MISSING: <term>` line per link with no corresponding note anywhere in the vault (excluding `.Trash/` and `Clippings/`).
 
 **Do NOT skip this step. Do NOT estimate from memory which notes exist.** Always run the audit.
 
